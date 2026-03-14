@@ -1,13 +1,13 @@
 export async function handler(event) {
+  const json = (statusCode, payload) => ({
+    statusCode,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
   try {
     if (event.httpMethod !== 'POST') {
-      return {
-        statusCode: 405,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ error: 'Method not allowed' }),
-      };
+      return json(405, { error: 'Method not allowed' });
     }
 
     const tokenUrl = process.env.KBZPAY_TOKEN_URL;
@@ -16,153 +16,135 @@ export async function handler(event) {
     const addPhotoUrl = process.env.APPCUBE_ADD_PHOTO_URL;
 
     if (!tokenUrl || !clientId || !clientSecret || !addPhotoUrl) {
-      return {
-        statusCode: 500,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          error: 'Missing required server environment variables',
-        }),
-      };
+      return json(500, {
+        error: 'Missing required server environment variables',
+        hasTokenUrl: Boolean(tokenUrl),
+        hasClientId: Boolean(clientId),
+        hasClientSecret: Boolean(clientSecret),
+        hasAddPhotoUrl: Boolean(addPhotoUrl),
+      });
     }
 
     let requestBody;
     try {
       requestBody = JSON.parse(event.body || '{}');
     } catch {
-      return {
-        statusCode: 400,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ error: 'Invalid JSON body' }),
-      };
+      return json(400, { error: 'Invalid JSON body' });
     }
 
     const { guestName, message, photoId, base64String } = requestBody || {};
 
     if (!photoId || typeof photoId !== 'string' || !photoId.trim()) {
-      return {
-        statusCode: 400,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ error: 'photoId is required' }),
-      };
+      return json(400, { error: 'photoId is required' });
     }
 
     if (!base64String || typeof base64String !== 'string' || !base64String.trim()) {
-      return {
-        statusCode: 400,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ error: 'base64String is required' }),
-      };
+      return json(400, { error: 'base64String is required' });
     }
 
-    // Step 1: get fresh OAuth token
+    // Step 1: get token
     const tokenForm = new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
       grant_type: 'client_credentials',
     });
 
-    const tokenResponse = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: tokenForm.toString(),
-    });
+    let tokenResponse;
+    let tokenText = '';
 
-    const tokenText = await tokenResponse.text();
+    try {
+      tokenResponse = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: tokenForm.toString(),
+      });
+
+      tokenText = await tokenResponse.text();
+    } catch (error) {
+      return json(500, {
+        stage: 'token-fetch',
+        error: error instanceof Error ? error.message : 'Token request failed',
+      });
+    }
 
     let tokenData = {};
     try {
       tokenData = tokenText ? JSON.parse(tokenText) : {};
     } catch {
-      return {
-        statusCode: 502,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          error: 'Invalid token response',
-          raw: tokenText,
-        }),
-      };
+      return json(500, {
+        stage: 'token-parse',
+        error: 'Token response was not valid JSON',
+        raw: tokenText,
+      });
     }
 
     if (!tokenResponse.ok) {
-      return {
-        statusCode: tokenResponse.status,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          error:
-            tokenData?.error_description ||
-            tokenData?.error ||
-            'Token request failed',
-          tokenResponse: tokenData,
-        }),
-      };
+      return json(tokenResponse.status, {
+        stage: 'token-response',
+        error:
+          tokenData?.error_description ||
+          tokenData?.error ||
+          'Token endpoint returned error',
+        tokenData,
+      });
     }
 
     const accessToken = tokenData?.access_token;
 
     if (!accessToken) {
-      return {
-        statusCode: 502,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          error: 'No access_token found in token response',
-          tokenResponse: tokenData,
-        }),
-      };
+      return json(500, {
+        stage: 'token-missing',
+        error: 'No access_token in token response',
+        tokenData,
+      });
     }
 
-    // Step 2: call add_photo API with fresh token
-    const uploadResponse = await fetch(addPhotoUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'access-token': accessToken,
-      },
-      body: JSON.stringify({
-        guestName: guestName?.trim() || 'Guest',
-        message: message?.trim() || '',
-        photoId: photoId.trim(),
-        base64String,
-      }),
-    });
+    // Step 2: upload photo
+    let uploadResponse;
+    let uploadText = '';
 
-    const uploadText = await uploadResponse.text();
-
-    return {
-      statusCode: uploadResponse.status,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body:
-        uploadText ||
-        JSON.stringify({
-          success: uploadResponse.ok,
+    try {
+      uploadResponse = await fetch(addPhotoUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'access-token': accessToken,
+        },
+        body: JSON.stringify({
+          guestName: guestName?.trim() || 'Guest',
+          message: message?.trim() || '',
+          photoId: photoId.trim(),
+          base64String,
         }),
-    };
+      });
+
+      uploadText = await uploadResponse.text();
+    } catch (error) {
+      return json(500, {
+        stage: 'upload-fetch',
+        error: error instanceof Error ? error.message : 'Upload request failed',
+      });
+    }
+
+    let uploadData = null;
+    try {
+      uploadData = uploadText ? JSON.parse(uploadText) : null;
+    } catch {
+      uploadData = { raw: uploadText };
+    }
+
+    return json(uploadResponse.status, {
+      stage: 'upload-response',
+      ok: uploadResponse.ok,
+      upstreamStatus: uploadResponse.status,
+      upstreamBody: uploadData,
+    });
   } catch (error) {
-    return {
-      statusCode: 500,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        error: error instanceof Error ? error.message : 'Unknown server error',
-      }),
-    };
+    return json(500, {
+      stage: 'unknown',
+      error: error instanceof Error ? error.message : 'Unknown server error',
+    });
   }
 }

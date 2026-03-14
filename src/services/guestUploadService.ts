@@ -38,9 +38,7 @@ export async function uploadSingleGuestPhoto(
   const parsedBody = await parseResponseBody(response);
 
   if (!response.ok) {
-    throw new Error(
-      extractErrorMessage(parsedBody, `Photo upload failed with status ${response.status}.`),
-    );
+    throw new Error(extractErrorMessage(parsedBody, `Photo upload failed with status ${response.status}.`));
   }
 
   return {
@@ -73,20 +71,22 @@ async function parseResponseBody(response: Response) {
   try {
     return JSON.parse(rawText) as unknown;
   } catch {
-    return {
-      error: `Non-JSON response received (status ${response.status})`,
-    };
+    return { error: `Non-JSON response received (status ${response.status})` };
   }
 }
 
 function extractErrorMessage(payload: unknown, fallback: string) {
   if (payload && typeof payload === 'object') {
     const maybeError = payload as Record<string, unknown>;
+
     const candidates = [
       maybeError.error,
       maybeError.errorMessage,
       maybeError.message,
       maybeError.detail,
+      maybeError.stage && maybeError.error
+        ? `${String(maybeError.stage)}: ${String(maybeError.error)}`
+        : undefined,
     ];
 
     for (const candidate of candidates) {
@@ -94,10 +94,6 @@ function extractErrorMessage(payload: unknown, fallback: string) {
         return candidate;
       }
     }
-  }
-
-  if (typeof payload === 'string' && payload.trim()) {
-    return payload;
   }
 
   return fallback || 'Photo upload failed.';

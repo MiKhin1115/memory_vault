@@ -1,16 +1,31 @@
-export async function handler(event) {
-  const json = (statusCode, payload) => ({
+function json(statusCode, payload) {
+  return {
     statusCode,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(payload),
-  });
+  };
+}
 
-  console.log('function invoked');
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function handler(event) {
+  try {
     if (event.httpMethod !== 'POST') {
-      console.log('wrong method:', event.httpMethod);
-      return json(405, { error: 'Method not allowed' });
+      return json(405, { stage: 'method', error: 'Method not allowed' });
     }
 
     const tokenUrl = process.env.KBZPAY_TOKEN_URL;
@@ -18,23 +33,42 @@ export async function handler(event) {
     const clientSecret = process.env.KBZPAY_CLIENT_SECRET;
     const addPhotoUrl = process.env.APPCUBE_ADD_PHOTO_URL;
 
-    console.log('env check', {
-      hasTokenUrl: !!tokenUrl,
-      hasClientId: !!clientId,
-      hasClientSecret: !!clientSecret,
-      hasAddPhotoUrl: !!addPhotoUrl,
-    });
+    if (!tokenUrl || !clientId || !clientSecret || !addPhotoUrl) {
+      return json(500, {
+        stage: 'config',
+        error: 'Missing required server environment variables',
+        hasTokenUrl: Boolean(tokenUrl),
+        hasClientId: Boolean(clientId),
+        hasClientSecret: Boolean(clientSecret),
+        hasAddPhotoUrl: Boolean(addPhotoUrl),
+      });
+    }
 
-    const requestBody = JSON.parse(event.body || '{}');
+    let requestBody;
+    try {
+      requestBody = JSON.parse(event.body || '{}');
+    } catch {
+      return json(400, {
+        stage: 'validate-request',
+        error: 'Invalid JSON body',
+      });
+    }
+
     const { guestName, message, photoId, base64String } = requestBody || {};
 
-    console.log('request parsed', {
-      hasPhotoId: !!photoId,
-      hasBase64: !!base64String,
-      base64Length: typeof base64String === 'string' ? base64String.length : 0,
-    });
+    if (!photoId || typeof photoId !== 'string' || !photoId.trim()) {
+      return json(400, {
+        stage: 'validate-request',
+        error: 'photoId is required',
+      });
+    }
 
-    console.log('starting token request');
+    if (!base64String || typeof base64String !== 'string' || !base64String.trim()) {
+      return json(400, {
+        stage: 'validate-request',
+        error: 'base64String is required',
+      });
+    }
 
     const tokenForm = new URLSearchParams({
       client_id: clientId,
@@ -42,24 +76,48 @@ export async function handler(event) {
       grant_type: 'client_credentials',
     });
 
-    const tokenResponse = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: tokenForm.toString(),
-    });
+    let tokenResponse;
+    let tokenText = '';
 
-    console.log('token response received', tokenResponse.status);
+    try {
+      tokenResponse = await fetchWithTimeout(
+        tokenUrl,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: tokenForm.toString(),
+        },
+        8000,
+      );
 
-    const tokenText = await tokenResponse.text();
-    const tokenData = tokenText ? JSON.parse(tokenText) : {};
+      tokenText = await tokenResponse.text();
+    } catch (error) {
+      return json(500, {
+        stage: 'token-fetch',
+        error: error instanceof Error ? error.message : 'Token fetch failed',
+      });
+    }
+
+    let tokenData = {};
+    try {
+      tokenData = tokenText ? JSON.parse(tokenText) : {};
+    } catch {
+      return json(500, {
+        stage: 'token-parse',
+        error: 'Token response was not valid JSON',
+        raw: tokenText,
+      });
+    }
 
     if (!tokenResponse.ok) {
-      console.log('token error body', tokenData);
       return json(tokenResponse.status, {
         stage: 'token-response',
-        error: tokenData?.error_description || tokenData?.error || 'Token request failed',
+        error:
+          tokenData?.error_description ||
+          tokenData?.error ||
+          'Token endpoint returned error',
         tokenData,
       });
     }
@@ -67,41 +125,57 @@ export async function handler(event) {
     const accessToken = tokenData?.access_token;
 
     if (!accessToken) {
-      console.log('missing access token');
       return json(500, {
         stage: 'token-missing',
         error: 'No access_token returned',
+        tokenData,
       });
     }
 
-    console.log('starting upload request');
+    let uploadResponse;
+    let uploadText = '';
 
-    const uploadResponse = await fetch(addPhotoUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'access-token': accessToken,
-      },
-      body: JSON.stringify({
-        guestName: guestName?.trim() || 'Guest',
-        message: message?.trim() || '',
-        photoId: photoId.trim(),
-        base64String,
-      }),
-    });
+    try {
+      uploadResponse = await fetchWithTimeout(
+        addPhotoUrl,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'access-token': accessToken,
+          },
+          body: JSON.stringify({
+            guestName: guestName?.trim() || 'Guest',
+            message: message?.trim() || '',
+            photoId: photoId.trim(),
+            base64String,
+          }),
+        },
+        8000,
+      );
 
-    console.log('upload response received', uploadResponse.status);
+      uploadText = await uploadResponse.text();
+    } catch (error) {
+      return json(500, {
+        stage: 'upload-fetch',
+        error: error instanceof Error ? error.message : 'Upload fetch failed',
+      });
+    }
 
-    const uploadText = await uploadResponse.text();
-    console.log('upload response text length', uploadText.length);
+    let uploadData = null;
+    try {
+      uploadData = uploadText ? JSON.parse(uploadText) : null;
+    } catch {
+      uploadData = { raw: uploadText };
+    }
 
     return json(uploadResponse.status, {
       stage: 'upload-response',
       ok: uploadResponse.ok,
-      raw: uploadText,
+      upstreamStatus: uploadResponse.status,
+      upstreamBody: uploadData,
     });
   } catch (error) {
-    console.log('function error', error);
     return json(500, {
       stage: 'unknown',
       error: error instanceof Error ? error.message : 'Unknown server error',

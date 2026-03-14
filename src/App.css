@@ -245,6 +245,55 @@ body {
   color: var(--danger);
 }
 
+.upload-progress-card {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.upload-progress-header,
+.upload-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.upload-progress-copy {
+  justify-content: flex-start;
+}
+
+.upload-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(184, 105, 86, 0.18);
+  border-top-color: var(--accent-deep);
+  border-radius: 999px;
+  animation: vault-spin 0.85s linear infinite;
+}
+
+.upload-progress-track {
+  overflow: hidden;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(184, 105, 86, 0.12);
+}
+
+.upload-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-deep) 100%);
+  transition: width 0.28s ease;
+}
+
+.upload-progress-meta {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
 .submit-button {
   width: 100%;
   min-height: 56px;
@@ -271,6 +320,7 @@ body {
 .success-card {
   padding: 2rem 1.4rem;
   text-align: center;
+  animation: vault-pop 0.45s ease;
 }
 
 .success-icon {
@@ -282,6 +332,39 @@ body {
   border-radius: 18px;
   background: var(--accent-soft);
   color: var(--accent-deep);
+  animation: vault-pulse 0.9s ease;
+}
+
+@keyframes vault-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes vault-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes vault-pulse {
+  0% {
+    transform: scale(0.92);
+  }
+
+  65% {
+    transform: scale(1.04);
+  }
+
+  100% {
+    transform: scale(1);
+  }
 }
 
 @media (min-width: 640px) {

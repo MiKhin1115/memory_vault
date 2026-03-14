@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent, FormEvent } from 'react';
 import { Camera, Plus, Trash2 } from 'lucide-react';
-import { uploadMultipleGuestPhotos } from './services/guestUploadService';
+import {
+  MAX_PHOTOS_PER_SUBMISSION,
+  type UploadProgress,
+  uploadMultipleGuestPhotos,
+  validateGuestPhotoFile,
+} from './services/guestUploadService';
 import './App.css';
 
 type UploadState = 'idle' | 'compressing' | 'uploading' | 'success' | 'error';
@@ -12,9 +17,6 @@ type SelectedPhoto = {
   previewUrl: string;
 };
 
-const maxImageDimension = 2200;
-const compressedImageQuality = 0.82;
-
 function App() {
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
@@ -22,6 +24,7 @@ function App() {
   const [status, setStatus] = useState<UploadState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const photosRef = useRef<SelectedPhoto[]>([]);
 
@@ -37,16 +40,24 @@ function App() {
   }, [photos.length]);
 
   const statusText = useMemo(() => {
+    if (uploadProgress?.stage === 'retrying') {
+      return `Retrying photo ${uploadProgress.currentFileIndex + 1} of ${uploadProgress.totalFiles}`;
+    }
+
     if (status === 'compressing') {
-      return 'Compressing photos...';
+      return uploadProgress
+        ? `Preparing photo ${uploadProgress.currentFileIndex + 1} of ${uploadProgress.totalFiles}`
+        : 'Preparing photos...';
     }
 
     if (status === 'uploading') {
-      return 'Sending photos...';
+      return uploadProgress
+        ? `Uploading photo ${uploadProgress.currentFileIndex + 1} of ${uploadProgress.totalFiles}`
+        : 'Sending photos...';
     }
 
     return null;
-  }, [status]);
+  }, [status, uploadProgress]);
 
   useEffect(() => {
     photosRef.current = photos;
@@ -71,21 +82,49 @@ function App() {
     setStatus((currentStatus) => (currentStatus === 'error' ? 'idle' : currentStatus));
 
     setPhotos((currentPhotos) => {
+      if (currentPhotos.length >= MAX_PHOTOS_PER_SUBMISSION) {
+        setError(`You can upload up to ${MAX_PHOTOS_PER_SUBMISSION} photos at a time.`);
+        return currentPhotos;
+      }
+
       const existingIds = new Set(currentPhotos.map((photo) => photo.id));
-      const nextPhotos = incomingFiles
-        .map((file, index) => ({
+      const availableSlots = MAX_PHOTOS_PER_SUBMISSION - currentPhotos.length;
+      const nextPhotos: SelectedPhoto[] = [];
+      let nextError: string | null = null;
+
+      incomingFiles.slice(0, availableSlots).forEach((file, index) => {
+        if (nextError) {
+          return;
+        }
+
+        const validationError = validateGuestPhotoFile(file);
+
+        if (validationError) {
+          nextError = validationError;
+          return;
+        }
+
+        const photo = {
           id: `${file.name}-${file.lastModified}-${file.size}-${index}`,
           file,
           previewUrl: URL.createObjectURL(file),
-        }))
-        .filter((photo) => {
-          if (existingIds.has(photo.id)) {
-            URL.revokeObjectURL(photo.previewUrl);
-            return false;
-          }
+        };
 
-          return true;
-        });
+        if (existingIds.has(photo.id)) {
+          URL.revokeObjectURL(photo.previewUrl);
+          return;
+        }
+
+        nextPhotos.push(photo);
+      });
+
+      if (!nextError && incomingFiles.length > availableSlots) {
+        nextError = `You can upload up to ${MAX_PHOTOS_PER_SUBMISSION} photos at a time.`;
+      }
+
+      if (nextError) {
+        setError(nextError);
+      }
 
       return [...currentPhotos, ...nextPhotos];
     });
@@ -154,33 +193,27 @@ function App() {
 
     setStatus('compressing');
     setError(null);
+    setUploadProgress(null);
 
     try {
-      const compressedFiles = await Promise.all(
-        photos.map(async ({ file }) => {
-          const shouldCompress = !/\.(heic|heif)$/i.test(file.name);
-
-          if (!shouldCompress) {
-            return file;
-          }
-
-          return compressImage(file);
-        }),
-      );
-
-      setStatus('uploading');
       await uploadMultipleGuestPhotos(
-        compressedFiles,
+        photos.map(({ file }) => file),
         name.trim() || undefined,
         message.trim() || undefined,
+        (progress) => {
+          setUploadProgress(progress);
+          setStatus(progress.stage === 'preparing' ? 'compressing' : 'uploading');
+        },
       );
 
       revokePreviews(photos);
       setPhotos([]);
       setName('');
       setMessage('');
+      setUploadProgress(null);
       setStatus('success');
     } catch (submitError) {
+      setUploadProgress(null);
       setStatus('error');
       setError(submitError instanceof Error ? submitError.message : 'Something went wrong.');
     }
@@ -304,6 +337,32 @@ function App() {
             <p className={`status-note${error ? ' is-error' : ''}`}>{error ?? statusText}</p>
           )}
 
+          {uploadProgress && !error && (
+            <section className="upload-progress-card" aria-live="polite">
+              <div className="upload-progress-header">
+                <div className="upload-progress-copy">
+                  <span className="upload-spinner" aria-hidden="true" />
+                  <strong>{statusText}</strong>
+                </div>
+                <span>{uploadProgress.progress}%</span>
+              </div>
+
+              <div className="upload-progress-track" aria-hidden="true">
+                <div
+                  className="upload-progress-fill"
+                  style={{ width: `${uploadProgress.progress}%` }}
+                />
+              </div>
+
+              <p className="upload-progress-meta">
+                {uploadProgress.currentFileName}
+                {uploadProgress.duplicateCount > 0
+                  ? ` · ${uploadProgress.duplicateCount} duplicate${uploadProgress.duplicateCount > 1 ? 's' : ''} skipped`
+                  : ''}
+              </p>
+            </section>
+          )}
+
           <button className="submit-button" type="submit" disabled={!hasPhotos || isSubmitting}>
             {status === 'compressing'
               ? 'Compressing photos...'
@@ -319,70 +378,6 @@ function App() {
 
 export default App;
 
-async function compressImage(file: File) {
-  if (typeof window === 'undefined' || !file.type.startsWith('image/')) {
-    return file;
-  }
-
-  const imageUrl = URL.createObjectURL(file);
-
-  try {
-    const image = await loadImage(imageUrl);
-    const { width, height } = fitWithinBounds(image.width, image.height, maxImageDimension);
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-
-    const context = canvas.getContext('2d');
-
-    if (!context) {
-      return file;
-    }
-
-    context.drawImage(image, 0, 0, width, height);
-
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, 'image/jpeg', compressedImageQuality);
-    });
-
-    if (!blob) {
-      return file;
-    }
-
-    const nextName = file.name.replace(/\.(png|jpe?g)$/i, '.jpg');
-    return new File([blob], nextName, { type: 'image/jpeg' });
-  } finally {
-    URL.revokeObjectURL(imageUrl);
-  }
-}
-
 function revokePreviews(items: SelectedPhoto[]) {
   items.forEach((item) => URL.revokeObjectURL(item.previewUrl));
-}
-
-function loadImage(src: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error('Unable to process one of the selected images.'));
-    image.src = src;
-  });
-}
-
-function fitWithinBounds(width: number, height: number, maxDimension: number) {
-  if (width <= maxDimension && height <= maxDimension) {
-    return { width, height };
-  }
-
-  if (width > height) {
-    return {
-      width: maxDimension,
-      height: Math.round((height / width) * maxDimension),
-    };
-  }
-
-  return {
-    width: Math.round((width / height) * maxDimension),
-    height: maxDimension,
-  };
 }

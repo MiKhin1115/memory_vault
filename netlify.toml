@@ -4,12 +4,6 @@
   functions = "netlify/functions"
 
 [[redirects]]
-  from = "/api/add-photo"
-  to = "/.netlify/functions/add-photo"
-  status = 200
-  force = true
-
-[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200

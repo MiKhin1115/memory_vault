@@ -19,6 +19,7 @@ export async function uploadSingleGuestPhoto(
   message?: string,
 ): Promise<GuestUploadResult> {
   const base64String = await fileToBase64(file);
+
   const payload: GuestUploadPayload = {
     guestName: guestName?.trim() || '',
     message: message?.trim() || '',
@@ -26,7 +27,7 @@ export async function uploadSingleGuestPhoto(
     base64String,
   };
 
-  const response = await fetch('/api/add-photo', {
+  const response = await fetch('/.netlify/functions/add-photo', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -37,7 +38,9 @@ export async function uploadSingleGuestPhoto(
   const parsedBody = await parseResponseBody(response);
 
   if (!response.ok) {
-    throw new Error(extractErrorMessage(parsedBody, response.statusText));
+    throw new Error(
+      extractErrorMessage(parsedBody, `Photo upload failed with status ${response.status}.`),
+    );
   }
 
   return {
@@ -70,18 +73,11 @@ async function parseResponseBody(response: Response) {
   try {
     return JSON.parse(rawText) as unknown;
   } catch {
-    return {
-      rawText,
-      isNonJson: true
-    }
+    return { isNonJson: true };
   }
 }
 
 function extractErrorMessage(payload: unknown, fallback: string) {
-  if (typeof payload === 'string' && payload.trim()) {
-    return payload;
-  }
-
   if (payload && typeof payload === 'object') {
     const maybeError = payload as Record<string, unknown>;
     const candidates = [

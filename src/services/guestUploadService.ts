@@ -70,7 +70,10 @@ async function parseResponseBody(response: Response) {
   try {
     return JSON.parse(rawText) as unknown;
   } catch {
-    return rawText;
+    return {
+      rawText,
+      isNonJson: true
+    }
   }
 }
 

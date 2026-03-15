@@ -111,8 +111,8 @@ app.post('/api/add-photo', async (request, response) => {
   }
 });
 
-app.get('*', (_request, response) => {
-  response.sendFile(indexPath);
+app.get(/^(?!\/api).*/, (_req, res) => {
+  res.sendFile(path.join(distDir, 'index.html'));
 });
 
 app.listen(PORT, () => {

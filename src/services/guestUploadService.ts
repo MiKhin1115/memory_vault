@@ -31,7 +31,10 @@ type UploadServiceError = Error & {
   responseStatus?: number;
 };
 
-const UPLOAD_ENDPOINT = '/.netlify/functions/add-photo';
+const API_BASE_URL = (import.meta.env.VITE_PROXY_API_BASE_URL || 'http://localhost:3001').replace(
+  /\/$/,
+  '',
+);
 
 export const MAX_PHOTOS_PER_SUBMISSION = 12;
 export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
@@ -243,7 +246,7 @@ function sendUploadRequest(
   return new Promise<GuestUploadResult>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
 
-    xhr.open('POST', UPLOAD_ENDPOINT);
+    xhr.open('POST', `${API_BASE_URL}/api/add-photo`);
     xhr.responseType = 'text';
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.setRequestHeader('Accept', 'application/json');

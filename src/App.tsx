@@ -1,21 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent, FormEvent } from 'react';
 import { Camera, Plus, Trash2 } from 'lucide-react';
-import {
-  MAX_PHOTOS_PER_SUBMISSION,
-  type UploadProgress,
-  uploadMultipleGuestPhotos,
-  validateGuestPhotoFile,
-} from './services/guestUploadService';
 import './App.css';
 
-type UploadState = 'idle' | 'compressing' | 'uploading' | 'success' | 'error';
+type UploadState = 'idle' | 'submitting' | 'success' | 'error';
 
 type SelectedPhoto = {
   id: string;
   file: File;
   previewUrl: string;
 };
+
+const MAX_PHOTOS_PER_SUBMISSION = 20;
+
+const ACCEPTED_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/heic',
+  'image/heif',
+]);
+
+const ACCEPTED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.heic', '.heif'];
 
 function App() {
   const [name, setName] = useState('');
@@ -24,11 +29,10 @@ function App() {
   const [status, setStatus] = useState<UploadState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const photosRef = useRef<SelectedPhoto[]>([]);
 
-  const isSubmitting = status === 'compressing' || status === 'uploading';
+  const isSubmitting = status === 'submitting';
   const hasPhotos = photos.length > 0;
 
   const photoCountLabel = useMemo(() => {
@@ -38,26 +42,6 @@ function App() {
 
     return `${photos.length} photos ready to send`;
   }, [photos.length]);
-
-  const statusText = useMemo(() => {
-    if (uploadProgress?.stage === 'retrying') {
-      return `Retrying photo ${uploadProgress.currentFileIndex + 1} of ${uploadProgress.totalFiles}`;
-    }
-
-    if (status === 'compressing') {
-      return uploadProgress
-        ? `Preparing photo ${uploadProgress.currentFileIndex + 1} of ${uploadProgress.totalFiles}`
-        : 'Preparing photos...';
-    }
-
-    if (status === 'uploading') {
-      return uploadProgress
-        ? `Uploading photo ${uploadProgress.currentFileIndex + 1} of ${uploadProgress.totalFiles}`
-        : 'Sending photos...';
-    }
-
-    return null;
-  }, [status, uploadProgress]);
 
   useEffect(() => {
     photosRef.current = photos;
@@ -97,7 +81,7 @@ function App() {
           return;
         }
 
-        const validationError = validateGuestPhotoFile(file);
+        const validationError = validatePhotoFile(file);
 
         if (validationError) {
           nextError = validationError;
@@ -191,29 +175,22 @@ function App() {
       return;
     }
 
-    setStatus('compressing');
+    setStatus('submitting');
     setError(null);
-    setUploadProgress(null);
 
     try {
-      await uploadMultipleGuestPhotos(
-        photos.map(({ file }) => file),
-        name.trim() || undefined,
-        message.trim() || undefined,
-        (progress) => {
-          setUploadProgress(progress);
-          setStatus(progress.stage === 'preparing' ? 'compressing' : 'uploading');
-        },
-      );
+      await handleUploadPlaceholder({
+        guestName: name.trim(),
+        message: message.trim(),
+        files: photos.map(({ file }) => file),
+      });
 
       revokePreviews(photos);
       setPhotos([]);
       setName('');
       setMessage('');
-      setUploadProgress(null);
       setStatus('success');
     } catch (submitError) {
-      setUploadProgress(null);
       setStatus('error');
       setError(submitError instanceof Error ? submitError.message : 'Something went wrong.');
     }
@@ -226,8 +203,8 @@ function App() {
           <div className="success-icon">
             <Camera size={22} strokeWidth={2.2} />
           </div>
-          <h1>Photos sent successfully</h1>
-          <p>Thank you for sharing memories with the couple.</p>
+          <h1>Photos ready</h1>
+          <p>The frontend is ready. Connect your AppCube backend when you are ready to enable upload.</p>
         </section>
       </main>
     );
@@ -333,42 +310,10 @@ function App() {
             />
           </label>
 
-          {(error || statusText) && (
-            <p className={`status-note${error ? ' is-error' : ''}`}>{error ?? statusText}</p>
-          )}
-
-          {uploadProgress && !error && (
-            <section className="upload-progress-card" aria-live="polite">
-              <div className="upload-progress-header">
-                <div className="upload-progress-copy">
-                  <span className="upload-spinner" aria-hidden="true" />
-                  <strong>{statusText}</strong>
-                </div>
-                <span>{uploadProgress.progress}%</span>
-              </div>
-
-              <div className="upload-progress-track" aria-hidden="true">
-                <div
-                  className="upload-progress-fill"
-                  style={{ width: `${uploadProgress.progress}%` }}
-                />
-              </div>
-
-              <p className="upload-progress-meta">
-                {uploadProgress.currentFileName}
-                {uploadProgress.duplicateCount > 0
-                  ? ` · ${uploadProgress.duplicateCount} duplicate${uploadProgress.duplicateCount > 1 ? 's' : ''} skipped`
-                  : ''}
-              </p>
-            </section>
-          )}
+          {error && <p className="status-note is-error">{error}</p>}
 
           <button className="submit-button" type="submit" disabled={!hasPhotos || isSubmitting}>
-            {status === 'compressing'
-              ? 'Compressing photos...'
-              : status === 'uploading'
-                ? 'Sending photos...'
-                : 'Send Photos to Couple'}
+            {status === 'submitting' ? 'Upload Backend Not Implemented' : 'Send Photos to Couple'}
           </button>
         </form>
       </section>
@@ -380,4 +325,37 @@ export default App;
 
 function revokePreviews(items: SelectedPhoto[]) {
   items.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+}
+
+function validatePhotoFile(file: File) {
+  const normalizedName = file.name.toLowerCase();
+  const hasAcceptedExtension = ACCEPTED_IMAGE_EXTENSIONS.some((extension) =>
+    normalizedName.endsWith(extension),
+  );
+
+  if (file.type && ACCEPTED_IMAGE_TYPES.has(file.type)) {
+    return null;
+  }
+
+  if (hasAcceptedExtension) {
+    return null;
+  }
+
+  return 'Please upload a JPG, PNG, HEIC, or HEIF photo.';
+}
+
+async function handleUploadPlaceholder({
+  guestName,
+  message,
+  files,
+}: {
+  guestName: string;
+  message: string;
+  files: File[];
+}) {
+  console.log('Upload backend not implemented yet.', {
+    guestName,
+    message,
+    fileCount: files.length,
+  });
 }

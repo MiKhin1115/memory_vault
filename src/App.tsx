@@ -237,18 +237,47 @@ function App() {
 };
 
   if (status === 'success') {
-    return (
-      <main className="vault-shell success-shell">
-        <section className="success-card">
-          <div className="success-icon">
-            <Camera size={22} strokeWidth={2.2} />
-          </div>
-          <h1>Photos uploaded successfully</h1>
-          
-        </section>
-      </main>
-    );
-  }
+  return (
+    <main className="vault-shell success-shell">
+      <section className="success-card success-card-modern">
+        
+
+        <div className="success-checkmark" aria-hidden="true">
+          <span>✓</span>
+        </div>
+
+        <h1>Photos sent successfully</h1>
+        <p>
+          Thank you for sharing memories with the couple.
+        </p>
+
+        <div className="success-actions">
+          <button
+            type="button"
+            className="submit-button"
+            onClick={() => {
+              setStatus('idle');
+              setError(null);
+              setPhotos([]);
+              setName('');
+              setMessage('');
+            }}
+          >
+            Back to Home
+          </button>
+
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={openFilePicker}
+          >
+            Upload More Photos
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
 
   return (
     <main className="vault-shell">

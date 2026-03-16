@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent, FormEvent } from 'react';
 import { Camera, Plus, Trash2 } from 'lucide-react';
 import './App.css';
+import { uploadPhoto } from './api/photoApi';
+import { requestToken } from './api/authApi';
+import { useAuthStore } from './store/auth-store';
+import { fileToBase64 } from './utils/fileToBase64';
+import { compressImage } from "./utils/compressImage";
 
 type UploadState = 'idle' | 'submitting' | 'success' | 'error';
 
@@ -22,6 +27,8 @@ const ACCEPTED_IMAGE_TYPES = new Set([
 
 const ACCEPTED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.heic', '.heif'];
 
+
+
 function App() {
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
@@ -29,8 +36,11 @@ function App() {
   const [status, setStatus] = useState<UploadState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const photosRef = useRef<SelectedPhoto[]>([]);
+
+  const { setAccessToken } = useAuthStore();
 
   const isSubmitting = status === 'submitting';
   const hasPhotos = photos.length > 0;
@@ -39,7 +49,6 @@ function App() {
     if (photos.length === 1) {
       return '1 photo ready to send';
     }
-
     return `${photos.length} photos ready to send`;
   }, [photos.length]);
 
@@ -52,6 +61,22 @@ function App() {
       revokePreviews(photosRef.current);
     };
   }, []);
+
+ 
+
+  useEffect(() => {
+    const fetchToken = async () => {
+      try {
+        const token = await requestToken();
+        setAccessToken(token);
+        console.log('Token', token);
+      } catch (e) {
+        console.log(e);
+      }
+    };
+
+    fetchToken();
+  }, [setAccessToken]);
 
   const openFilePicker = () => {
     fileInputRef.current?.click();
@@ -133,19 +158,13 @@ function App() {
 
   const handleDragEnter = (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
-    if (isSubmitting) {
-      return;
-    }
-
+    if (isSubmitting) return;
     setIsDragging(true);
   };
 
   const handleDragOver = (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
-    if (isSubmitting) {
-      return;
-    }
-
+    if (isSubmitting) return;
     setIsDragging(true);
   };
 
@@ -160,41 +179,62 @@ function App() {
     event.preventDefault();
     setIsDragging(false);
 
-    if (isSubmitting) {
-      return;
-    }
+    if (isSubmitting) return;
 
     appendFiles(Array.from(event.dataTransfer.files ?? []));
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  event.preventDefault();
 
-    if (photos.length === 0) {
-      setError('Please select at least one photo.');
-      return;
+  if (photos.length === 0) {
+    setError('Please select at least one photo.');
+    return;
+  }
+
+  setStatus('submitting');
+  setError(null);
+
+  try {
+    let accessToken = useAuthStore.getState().accessToken;
+
+    if (!accessToken) {
+      accessToken = await requestToken();
+      useAuthStore.getState().setAccessToken(accessToken);
     }
 
-    setStatus('submitting');
-    setError(null);
-
-    try {
-      await handleUploadPlaceholder({
-        guestName: name.trim(),
-        message: message.trim(),
-        files: photos.map(({ file }) => file),
-      });
-
-      revokePreviews(photos);
-      setPhotos([]);
-      setName('');
-      setMessage('');
-      setStatus('success');
-    } catch (submitError) {
-      setStatus('error');
-      setError(submitError instanceof Error ? submitError.message : 'Something went wrong.');
+    if (!accessToken) {
+      throw new Error('Failed to get access token.');
     }
-  };
+
+    for (const photo of photos) {
+      const compressedFile = await compressImage(photo.file);
+      const base64String = await fileToBase64(compressedFile);
+      if (photo.file.size > 10 * 1024 * 1024) {
+  throw new Error("Please choose a photo smaller than 10MB.");
+}
+
+      await uploadPhoto(
+        {
+          guestName: name.trim() || 'Guest',
+          message: message.trim(),
+          photoId: photo.id,
+          base64String,
+        },
+        accessToken,
+      );
+    }
+
+    revokePreviews(photos);
+    setPhotos([]);
+    setName('');
+    setMessage('');
+    setStatus('success');
+  } catch (submitError) {
+    setStatus('error');
+    setError(submitError instanceof Error ? submitError.message : 'Something went wrong.');
+  }
+};
 
   if (status === 'success') {
     return (
@@ -203,8 +243,8 @@ function App() {
           <div className="success-icon">
             <Camera size={22} strokeWidth={2.2} />
           </div>
-          <h1>Photos ready</h1>
-          <p>The frontend is ready. Connect your AppCube backend when you are ready to enable upload.</p>
+          <h1>Photos uploaded successfully</h1>
+          
         </section>
       </main>
     );
@@ -313,7 +353,7 @@ function App() {
           {error && <p className="status-note is-error">{error}</p>}
 
           <button className="submit-button" type="submit" disabled={!hasPhotos || isSubmitting}>
-            {status === 'submitting' ? 'Upload Backend Not Implemented' : 'Send Photos to Couple'}
+            {status === 'submitting' ? 'Sending .....' : 'Send Photos to Couple'}
           </button>
         </form>
       </section>
@@ -344,18 +384,3 @@ function validatePhotoFile(file: File) {
   return 'Please upload a JPG, PNG, HEIC, or HEIF photo.';
 }
 
-async function handleUploadPlaceholder({
-  guestName,
-  message,
-  files,
-}: {
-  guestName: string;
-  message: string;
-  files: File[];
-}) {
-  console.log('Upload backend not implemented yet.', {
-    guestName,
-    message,
-    fileCount: files.length,
-  });
-}

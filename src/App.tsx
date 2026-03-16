@@ -266,13 +266,7 @@ function App() {
             Back to Home
           </button>
 
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={openFilePicker}
-          >
-            Upload More Photos
-          </button>
+          
         </div>
       </section>
     </main>

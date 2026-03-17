@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/service/(.*)",
+      "destination": "https://wap.kbzpay.com/service/$1"
+    },
+    {
+      "source": "/baas/(.*)",
+      "destination": "https://wap.kbzpay.com/baas/$1"
+    }
+  ]
+}
